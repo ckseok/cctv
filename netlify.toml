@@ -2,26 +2,28 @@
   publish = "."
   functions = "netlify/functions"
 
+# HTML 프록시
 [[redirects]]
   from = "/jinju"
   to = "/.netlify/functions/jinju"
   status = 200
   force = true
 
+# 정적 리소스 프록시(CSS/JS/IMG/폰트 등)
 [[redirects]]
   from = "/_res"
   to = "/.netlify/functions/res"
   status = 200
   force = true
 
-# XHR/Fetch 전용 프록시
+# XHR/Fetch 프록시
 [[redirects]]
   from = "/_xhr/*"
   to = "/.netlify/functions/xhr"
   status = 200
   force = true
 
-# 우리 사이트 안에서는 프레임 허용 (임베드 차단 헤더 제거)
+# 우리 사이트 안에서는 프레임 허용 (원본의 XFO/CSP 영향 제거)
 [[headers]]
   for = "/*"
   [headers.values]

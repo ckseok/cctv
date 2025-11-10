@@ -7,8 +7,12 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TTL = 60;
 
-export default async (req) => {
-  const selfOrigin = new URL(req.url).origin; // ★ 우리(넷리파이) 오리진
+export const handler = async (event) => {
+  // 우리 도메인 절대 오리진 (Netlify 프록시 절대경로 강제용)
+  const proto = event.headers["x-forwarded-proto"] || "https";
+  const host  = event.headers["x-forwarded-host"] || event.headers["host"];
+  const selfOrigin = `${proto}://${host}`;
+
   try {
     const upstream = await fetch(TARGET_ORIGIN + TARGET_PATH, {
       headers: {
@@ -19,30 +23,36 @@ export default async (req) => {
       },
       redirect: "follow"
     });
-    if (!upstream.ok) return new Response(`Upstream ${upstream.status}`, { status: 502 });
+
+    if (!upstream.ok) {
+      return {
+        statusCode: 502,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        body: `Upstream ${upstream.status} for ${TARGET_PATH}`
+      };
+    }
 
     const html = await upstream.text();
-    const $ = cheerioLoad(html, { decodeEntities: false });
+    const $ = cheerioLoad(html);
 
-    // 원본 <base>가 있으면 제거(상대경로 꼬임 방지)
-    $("head base").remove();
+    // 루트 경로가 /its/ 기준이 되도록 base 지정
+    if ($("head base").length === 0) $("head").prepend(`<base href="${TARGET_ORIGIN}/its/">`);
 
-    // URL 깨끗하게
     const clean = (v) =>
-      String(v || "")
-        .replace(/^['"]|['"]$/g, "")      // 앞뒤 따옴표 제거
-        .replace(/['"]?\s*\/?>\s*$/i, ""); // 끝에 '"/>' 같은 꼬리 제거
+      String(v || "").replace(/^['"]|['"]$/g, "").replace(/['"]?\s*\/?>$/i, "");
 
-    // 리소스는 전부 우리 도메인의 절대경로로 변환: https://<site>/_res?u=<abs>
+    // 모든 주요 리소스를 우리 도메인의 절대 프록시로 강제
     const rewrite = (sel, attr) => {
       $(sel).each((_, el) => {
         const raw = $(el).attr(attr);
         if (!raw) return;
         try {
-          const abs = new URL(clean(raw), TARGET_ORIGIN).toString();
+          // /its/ 기준으로 절대화 → 이후 우리 프록시로
+          const abs = new URL(clean(raw), `${TARGET_ORIGIN}/its/`).toString();
           const prox = `${selfOrigin}/_res?u=${encodeURIComponent(abs)}`;
           $(el).attr(attr, prox);
         } catch {}
+        // 재작성 후 SRI/크로스오리진은 무효가 되므로 제거
         $(el).removeAttr("integrity").removeAttr("crossorigin");
       });
     };
@@ -51,49 +61,58 @@ export default async (req) => {
     rewrite('link[rel="stylesheet"]', "href");
     rewrite("iframe", "src");
 
-    // 외부 링크는 새탭
+    // 외부 링크는 새 탭
     $("a[href]").each((_, el) => {
       const href = String($(el).attr("href") || "");
       if (href.startsWith("http")) $(el).attr({ target: "_blank", rel: "noopener" });
     });
 
-    // fetch / XHR 우회(절대 URL 사용)
+    // 브라우저의 fetch/XMLHttpRequest를 우리 XHR 프록시로 우회 (절대 URL 사용)
     $("head").append(`
       <script>
       (function(){
-        const ORIGIN=${JSON.stringify(TARGET_ORIGIN)};
-        const SELF=${JSON.stringify(selfOrigin)};
-        const toAbs=(u)=>{ try{ return new URL(u, ORIGIN).toString(); }catch(e){ return u; } };
-        const toXhr=(u)=> SELF + "/_xhr/?u=" + encodeURIComponent(toAbs(u));
+        const ORIGIN = ${JSON.stringify(TARGET_ORIGIN)};
+        const SELF   = ${JSON.stringify(selfOrigin)};
+        const toAbs  = (u)=>{ try{ return new URL(u, ORIGIN + "/its/").toString(); }catch(e){ return u; } };
+        const toXhr  = (u)=> SELF + "/_xhr/?u=" + encodeURIComponent(toAbs(u));
 
-        const _fetch=window.fetch;
-        window.fetch=function(input,init){
+        const _fetch = window.fetch;
+        window.fetch = function(input, init){
           try{
-            const url=(typeof input==="string")?input:(input&&input.url);
-            if(url && (url.startsWith("/")||url.startsWith(ORIGIN))) input=toXhr(url);
+            const url = (typeof input==="string") ? input : (input && input.url);
+            if (url && (url.startsWith("/") || url.startsWith(ORIGIN))) {
+              input = toXhr(url);
+            }
           }catch(e){}
-          return _fetch(input,init);
+          return _fetch(input, init);
         };
 
-        const _open=XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open=function(method,url){
+        const _open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url){
           try{
-            if(url && (url.startsWith("/")||url.startsWith(ORIGIN))) arguments[1]=toXhr(url);
+            if (url && (url.startsWith("/") || url.startsWith(ORIGIN))) {
+              arguments[1] = toXhr(url);
+            }
           }catch(e){}
-          return _open.apply(this,arguments);
+          return _open.apply(this, arguments);
         };
       })();
       </script>
     `);
 
-    return new Response($.html(), {
-      status: 200,
+    return {
+      statusCode: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": `public, max-age=${TTL}`
-      }
-    });
+      },
+      body: $.html()
+    };
   } catch (e) {
-    return new Response("Proxy failed: " + e.message, { status: 502 });
+    return {
+      statusCode: 502,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: "Proxy failed: " + e.message
+    };
   }
 };
