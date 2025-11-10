@@ -2,21 +2,26 @@
   publish = "."
   functions = "netlify/functions"
 
-# /jinju → 함수로
 [[redirects]]
   from = "/jinju"
   to = "/.netlify/functions/jinju"
   status = 200
   force = true
 
-# /_res → 함수로 (리소스 프록시)
 [[redirects]]
   from = "/_res"
   to = "/.netlify/functions/res"
   status = 200
   force = true
 
-# 보안 헤더(필요 최소만). X-Frame-Options는 보내지 않음(우리 페이지는 프레임 허용)
+# XHR/Fetch 전용 프록시
+[[redirects]]
+  from = "/_xhr/*"
+  to = "/.netlify/functions/xhr"
+  status = 200
+  force = true
+
+# 우리 사이트 안에서는 프레임 허용 (임베드 차단 헤더 제거)
 [[headers]]
   for = "/*"
   [headers.values]

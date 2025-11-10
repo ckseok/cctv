@@ -4,9 +4,9 @@ const TARGET_ORIGIN = "https://its.jinju.go.kr";
 const TARGET_PATH   = "/its/dsh/view";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-const CACHE_TTL_SEC = 60; // 원본 보호: 60초 캐시(네트리파이 에지 캐시는 아니지만, CDN 캐시 지시)
+const CACHE_TTL_SEC = 60;
 
-export default async (req, context) => {
+export default async () => {
   try {
     const upstream = await fetch(TARGET_ORIGIN + TARGET_PATH, {
       headers: {
@@ -17,20 +17,15 @@ export default async (req, context) => {
       },
       redirect: "follow"
     });
-    if (!upstream.ok) {
-      return new Response(`Upstream error: ${upstream.status}`, { status: 502 });
-    }
-    const html = await upstream.text();
+    if (!upstream.ok) return new Response(`Upstream ${upstream.status}`, { status: 502 });
 
-    // ── HTML 재작성 ─────────────────────────────────────────────
+    const html = await upstream.text();
     const $ = cheerioLoad(html);
 
-    // base 추가(상대경로 처리 보완)
-    if ($("head base").length === 0) {
-      $("head").prepend(`<base href="${TARGET_ORIGIN}/">`);
-    }
+    // 상대경로 보정용 <base>
+    if ($("head base").length === 0) $("head").prepend(`<base href="${TARGET_ORIGIN}/">`);
 
-    // 모든 주요 리소스를 우리 프록시로 경유 (상대/절대 무관)
+    // 리소스 → 우리 프록시(/_res?u=...)
     const rewrite = (sel, attr) => {
       $(sel).each((_, el) => {
         const v = $(el).attr(attr);
@@ -39,11 +34,13 @@ export default async (req, context) => {
           const abs = new URL(v, TARGET_ORIGIN).toString();
           $(el).attr(attr, `/_res?u=${encodeURIComponent(abs)}`);
         } catch {}
+        $(el).removeAttr("integrity").removeAttr("crossorigin");
       });
     };
     rewrite("img", "src");
     rewrite("script", "src");
     rewrite('link[rel="stylesheet"]', "href");
+    rewrite("iframe", "src");
 
     // 외부 링크는 새탭
     $("a[href]").each((_, el) => {
@@ -54,28 +51,27 @@ export default async (req, context) => {
       }
     });
 
-    // 출처 배지(선택)
-    if ($("#jinju-proxy-source").length === 0) {
-      $("body").append(`
-        <div id="jinju-proxy-source" style="
-          position:fixed;right:10px;bottom:10px;opacity:.6;
-          background:#111;color:#fff;padding:6px 10px;border-radius:8px;
-          font:12px/1.2 system-ui;z-index:2147483647">
-          출처: 진주시 ITS
-        </div>`);
-    }
+    // 브라우저 측에서 나가는 fetch/XHR를 /_xhr로 우회
+    $("head").append(`
+      <script>
+      (function(){
+        const ORIGIN = ${JSON.stringify(TARGET_ORIGIN)};
+        function toAbs(u){ try { return new URL(u, ORIGIN).toString(); } catch(e){ return u; } }
+        function toProxy(u){ return "/_xhr/?u=" + encodeURIComponent(toAbs(u)); }
 
-    const out = $.html();
+        // fetch 후킹
+        const _fetch = window.fetch;
+        window.fetch = function(input, init){
+          try{
+            const url = (typeof input === "string") ? input : (input && input.url);
+            if (url && (url.startsWith("/") || url.startsWith(ORIGIN))) {
+              input = toProxy(url);
+              init = init || {};
+              // 원본 쿠키/인증 헤더는 서버 함수에서 전달
+            }
+          }catch(e){}
+          return _fetch(input, init);
+        };
 
-    // 응답(프레임 차단 헤더 없음)
-    return new Response(out, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": `public, max-age=${CACHE_TTL_SEC}`
-      }
-    });
-  } catch (e) {
-    return new Response("Proxy failed: " + e.message, { status: 502 });
-  }
-};
+        // XHR 후킹
+        const _op_
