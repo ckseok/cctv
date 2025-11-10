@@ -1,0 +1,8 @@
+{
+  "name": "jinju-proxy-netlify",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  }
+}
