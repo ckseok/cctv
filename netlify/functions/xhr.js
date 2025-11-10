@@ -1,10 +1,9 @@
 // netlify/functions/xhr.js
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...";
 
-// 필요 시 데이터 API 도메인을 추가
 const ALLOW_HOSTS = new Set([
-  "its.jinju.go.kr"
+  "its.jinju.go.kr",
+  // 필요시: "openapi.jinju.go.kr", "tile.mapvendor.com" 등 추가
 ]);
 
 export const handler = async (event) => {
@@ -25,8 +24,7 @@ export const handler = async (event) => {
       },
       redirect: "follow"
     };
-
-    if (!["GET", "HEAD"].includes(event.httpMethod)) {
+    if (!["GET","HEAD"].includes(event.httpMethod)) {
       init.body = event.isBase64Encoded ? Buffer.from(event.body, "base64") : event.body;
     }
 

@@ -3,26 +3,32 @@ const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
 const TTL = 300;
 
-// 여러 도메인이 필요하면 여기에 추가
-const ALLOW_HOSTS = new Set([
-  "its.jinju.go.kr"
-]);
+// 필요 시 추가 호스트를 여기에 넣으세요.
+const ALLOW_HOSTS = new Set(["its.jinju.go.kr"]);
 
-function rewriteCssUrls(cssText, base, selfOrigin) {
-  // CSS 내부 url(...) → 우리 프록시 절대경로로
-  return cssText.replace(/url\(([^)]+)\)/g, (m, raw) => {
-    let u = String(raw).trim().replace(/^['"]|['"]$/g, "");
+function mustTreatAsCss(contentType, urlStr) {
+  const ct = (contentType || "").toLowerCase();
+  return ct.includes("text/css") || /\.css(\?|#|$)/i.test(urlStr);
+}
+
+function rewriteCssUrls(cssText, cssAbsoluteUrl, selfOrigin) {
+  // url('...') / url("...") / url(...) 모두 처리, data:는 스킵
+  return cssText.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (m, q, raw) => {
+    const u = String(raw).trim();
+    if (/^data:/i.test(u)) return m; // data URI는 그대로
     try {
-      const abs = new URL(u, base).toString();
-      return `url(${selfOrigin}/_res?u=${encodeURIComponent(abs)})`;
-    } catch { return m; }
+      const abs = new URL(u, cssAbsoluteUrl).toString();         // 원본 기준 절대화
+      return `url(${selfOrigin}/_res?u=${encodeURIComponent(abs)})`; // 우리 프록시 절대경로
+    } catch {
+      return m;
+    }
   });
 }
 
 export const handler = async (event) => {
   const proto = event.headers["x-forwarded-proto"] || "https";
   const host  = event.headers["x-forwarded-host"] || event.headers["host"];
-  const selfOrigin = `${proto}://${host}`; // 우리 절대오리진
+  const selfOrigin = `${proto}://${host}`;
 
   try {
     const u = (event.queryStringParameters && event.queryStringParameters.u) || "";
@@ -46,8 +52,8 @@ export const handler = async (event) => {
     }
 
     const ct = r.headers.get("content-type") || "";
-    if (ct.includes("text/css")) {
-      const text = await r.text();
+    if (mustTreatAsCss(ct, parsed.toString())) {
+      const text = await r.text(); // (압축은 fetch가 자동 해제)
       const rewritten = rewriteCssUrls(text, parsed.toString(), selfOrigin);
       return {
         statusCode: 200,
